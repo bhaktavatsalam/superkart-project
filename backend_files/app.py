@@ -1,69 +1,86 @@
 import os
+import sys
 import joblib
 import pandas as pd
 from flask import Flask, request, jsonify
 
-app = Flask(__name__)
-
-# Safe resolution for environments that do not support __file__ (such as Google Colab)
+# =====================================================================
+# MONKEY PATCH: DYNAMIC RANDOM STATE TRANSLATION (BYPASS NUMPY TYPE ERROR)
+# =====================================================================
+# This forces pickle to dynamically map the old BitGenerator structure 
+# to the current NumPy layout regardless of container patch imbalances.
 try:
-    base_dir = os.path.dirname(__file__)
-except NameError:
-    base_dir = os.getcwd()
+    import numpy as np
+    import numpy.random._mt19937 as old_mt
+    # If the alias is missing, link it directly to the system random module
+    if not hasattr(old_mt, 'MT19937'):
+        import numpy.random as nr
+        sys.modules['numpy.random._mt19937'] = nr
+except Exception:
+    import numpy.random as nr
+    import types
+    # Dynamically inject the missing tracking module into the active python path
+    mod = types.ModuleType('numpy.random._mt19937')
+    mod.MT19937 = nr.MT19937 if hasattr(nr, 'MT19937') else None
+    sys.modules['numpy.random._mt19937'] = mod
 
-MODEL_PATH = os.path.join(base_dir, "superkart_model.joblib")
+# Initialize Flask Application
+app = Flask(__name__)
+MODEL_PATH = os.path.join(os.path.dirname(__file__), "superkart_model.joblib")
 
-if os.path.exists(MODEL_PATH):
-    model = joblib.load(MODEL_PATH)
-    print("✔ Model loaded successfully into Backend runtime.")
-else:
-    print(f"Warning: {MODEL_PATH} not found. Please upload the file to this folder.")
+# Safe unpickling attempt
+try:
+    if os.path.exists(MODEL_PATH):
+        model = joblib.load(MODEL_PATH)
+        print("✔ Model unpickled and loaded successfully into Backend runtime.")
+    else:
+        model = None
+        print(f"Warning: {MODEL_PATH} not found. Running server without estimator.")
+except Exception as unpickle_error:
+    model = None
+    print(f"🚨 Unpickling fallback intercept triggered. Error isolated: {str(unpickle_error)}")
 
 @app.route('/health', methods=['GET'])
 def health_check():
-    return jsonify({"status": "healthy", "model_loaded": os.path.exists(MODEL_PATH)}), 200
+    return jsonify({
+        "status": "healthy", 
+        "model_loaded": (model is not None),
+        "file_exists": os.path.exists(MODEL_PATH)
+    }), 200
 
 @app.route('/predict', methods=['POST'])
 def predict_sales():
-    """Handles single instance or lightweight structural item tracking."""
+    if model is None:
+        return jsonify({"status": "error", "message": "Model engine is uninitialized due to library mismatch."}), 503
     try:
         data = request.get_json()
         if not data:
             return jsonify({"error": "Malformed request. No JSON payload received."}), 400
-
+        
         input_df = pd.DataFrame(data)
         raw_predictions = model.predict(input_df)
         formatted_predictions = [round(float(pred), 2) for pred in raw_predictions]
-
+        
         return jsonify({"status": "success", "predictions": formatted_predictions}), 200
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
-# =====================================================================
-# BATCH PREDICTION ENDPOINT
-# =====================================================================
 @app.route('/predictbatch', methods=['POST'])
 def predict_batch_sales():
-    """
-    Consumes multi-row batch payloads (e.g., historical file rows).
-    Computes total consolidated revenue forecasts across all input rows.
-    """
+    if model is None:
+        return jsonify({"status": "error", "message": "Model engine is uninitialized due to library mismatch."}), 503
     try:
         data = request.get_json()
         if not data:
             return jsonify({"error": "Malformed batch request. Empty payload."}), 400
-
-        # Ingest full nested data array directly into a Dataframe layout
+        
         input_df = pd.DataFrame(data)
-
-        # Execute batch inference matrix multiplication
         raw_predictions = model.predict(input_df)
         formatted_predictions = [round(float(pred), 2) for pred in raw_predictions]
-
-        # Compute macro operational supply chain total metrics
+        
         total_predicted_batch_revenue = round(sum(formatted_predictions), 2)
         record_count = len(formatted_predictions)
-
+        
         return jsonify({
             "status": "success",
             "batch_summary": {
@@ -72,7 +89,6 @@ def predict_batch_sales():
             },
             "predictions": formatted_predictions
         }), 200
-
     except Exception as e:
         return jsonify({"status": "error", "message": f"Batch process failure: {str(e)}"}), 500
 
