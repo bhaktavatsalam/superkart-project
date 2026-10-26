@@ -2,7 +2,7 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Ensure container system packages are updated and pip is at the absolute latest version
+# Install system utilities and upgrade pip to avoid installation warnings
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     && rm -rf /var/lib/apt/lists/* \
@@ -10,8 +10,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY requirements.txt .
 
-# Force a clean installation directly from the remote repository mirrors
-RUN pip install --no-cache-dir -r requirements.txt
+# CRITICAL FIX: Explicitly uninstall any modern NumPy variants and force-install legacy 1.x binaries
+RUN pip install --no-cache-dir -r requirements.txt \
+    && pip uninstall -y numpy \
+    && pip install --no-cache-dir "numpy<2.0.0"
 
 COPY . .
 
