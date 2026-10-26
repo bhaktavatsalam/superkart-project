@@ -4,7 +4,14 @@ import pandas as pd
 from flask import Flask, request, jsonify
 
 app = Flask(__name__)
-MODEL_PATH = os.path.join(os.path.dirname(__file__), "superkart_model.joblib")
+
+# Safe resolution for environments that do not support __file__ (such as Google Colab)
+try:
+    base_dir = os.path.dirname(__file__)
+except NameError:
+    base_dir = os.getcwd()
+
+MODEL_PATH = os.path.join(base_dir, "superkart_model.joblib")
 
 if os.path.exists(MODEL_PATH):
     model = joblib.load(MODEL_PATH)
@@ -23,17 +30,17 @@ def predict_sales():
         data = request.get_json()
         if not data:
             return jsonify({"error": "Malformed request. No JSON payload received."}), 400
-        
+
         input_df = pd.DataFrame(data)
         raw_predictions = model.predict(input_df)
         formatted_predictions = [round(float(pred), 2) for pred in raw_predictions]
-        
+
         return jsonify({"status": "success", "predictions": formatted_predictions}), 200
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
 # =====================================================================
-# NEW: BATCH PREDICTION ENDPOINT
+# BATCH PREDICTION ENDPOINT
 # =====================================================================
 @app.route('/predictbatch', methods=['POST'])
 def predict_batch_sales():
@@ -45,18 +52,18 @@ def predict_batch_sales():
         data = request.get_json()
         if not data:
             return jsonify({"error": "Malformed batch request. Empty payload."}), 400
-        
+
         # Ingest full nested data array directly into a Dataframe layout
         input_df = pd.DataFrame(data)
-        
+
         # Execute batch inference matrix multiplication
         raw_predictions = model.predict(input_df)
         formatted_predictions = [round(float(pred), 2) for pred in raw_predictions]
-        
+
         # Compute macro operational supply chain total metrics
         total_predicted_batch_revenue = round(sum(formatted_predictions), 2)
         record_count = len(formatted_predictions)
-        
+
         return jsonify({
             "status": "success",
             "batch_summary": {
@@ -65,7 +72,7 @@ def predict_batch_sales():
             },
             "predictions": formatted_predictions
         }), 200
-        
+
     except Exception as e:
         return jsonify({"status": "error", "message": f"Batch process failure: {str(e)}"}), 500
 
